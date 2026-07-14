@@ -16,9 +16,15 @@ let db = null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'gnt-companion-app';
 
 try {
-  const configStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
-  if (configStr && configStr.trim() !== '' && configStr !== '{}') {
-    const firebaseConfig = JSON.parse(configStr);
+  const firebaseConfig = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  };
+  if (firebaseConfig.apiKey && firebaseConfig.projectId) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
@@ -236,7 +242,14 @@ const NEW_STOP_TEMPLATE = { time: '12:00', activity: 'New stop', type: 'landmark
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [itineraryData, setItineraryData] = useState(INITIAL_ITINERARY);
+  const [itineraryData, setItineraryData] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('gnt_itinerary_2026');
+      return saved ? JSON.parse(saved) : INITIAL_ITINERARY;
+    } catch (e) {
+      return INITIAL_ITINERARY;
+    }
+  });
   const [isEditing, setIsEditing] = useState(false);
   const [activeDay, setActiveDay] = useState(1);
   
@@ -321,6 +334,7 @@ export default function App() {
 
   const saveToCloud = async (newData) => {
     setItineraryData(newData); // Immediate Optimistic UI update
+    try { window.localStorage.setItem('gnt_itinerary_2026', JSON.stringify(newData)); } catch (e) {}
     if (user && db) {
       try {
         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'itineraryData', 'main');
