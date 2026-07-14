@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Compass, MapPin, Clock, Car, Utensils, CheckSquare, 
-  Check, Plus, Trash2, Calendar,
+  Check, Plus, Trash2, Calendar, Navigation,
   Edit3, Save, X, Image as ImageIcon
 } from 'lucide-react';
 
@@ -232,9 +232,10 @@ const INITIAL_TASKS = [
 const sanitizeDay = (day) => {
   if (!day || typeof day !== 'object') return day;
   const safe = { ...day };
-  if (safe.timeline !== undefined) safe.timeline = Array.isArray(safe.timeline) ? safe.timeline : [];
-  if (safe.car1Timeline !== undefined) safe.car1Timeline = Array.isArray(safe.car1Timeline) ? safe.car1Timeline : [];
-  if (safe.car2Timeline !== undefined) safe.car2Timeline = Array.isArray(safe.car2Timeline) ? safe.car2Timeline : [];
+  const withIds = (list, prefix) => Array.isArray(list) ? list.map((s, i) => s && s.id ? s : { ...s, id: `${prefix}_${i}_${s?.time || ''}_${s?.activity || ''}` }) : [];
+  if (safe.timeline !== undefined) safe.timeline = withIds(safe.timeline, 'stop');
+  if (safe.car1Timeline !== undefined) safe.car1Timeline = withIds(safe.car1Timeline, 'c1stop');
+  if (safe.car2Timeline !== undefined) safe.car2Timeline = withIds(safe.car2Timeline, 'c2stop');
   if (typeof safe.title !== 'string') safe.title = `Day ${safe.day ?? ''}`.trim();
   return safe;
 };
@@ -248,6 +249,8 @@ const isValidTasks = (data) =>
   Array.isArray(data) && data.every(t => t && typeof t === 'object' && 'id' in t && typeof t.text === 'string');
 
 const NEW_STOP_TEMPLATE = { time: '12:00', activity: 'New stop', type: 'landmark', notes: '' };
+
+const mapsUrlFor = (item) => item.maps || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.activity)}`;
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -407,7 +410,7 @@ export default function App() {
     const newData = JSON.parse(JSON.stringify(safeItineraryData));
     const key = splitTimelineKey || 'timeline';
     if (!Array.isArray(newData[dayIndex][key])) newData[dayIndex][key] = [];
-    newData[dayIndex][key].push({ ...NEW_STOP_TEMPLATE });
+    newData[dayIndex][key].push({ ...NEW_STOP_TEMPLATE, id: `stop_${Date.now()}` });
     saveToCloud(newData);
   };
 
@@ -754,7 +757,7 @@ export default function App() {
                       const isTravel = item.type === 'travel';
 
                       return (
-                        <div key={timelineIndex} className="relative flex gap-6 items-start group">
+                        <div key={item.id ?? timelineIndex} className="relative flex gap-6 items-start group">
                           
                           {/* Left Connection Line */}
                           <div className="flex flex-col items-center h-full absolute left-0 top-0 -bottom-8">
@@ -830,6 +833,15 @@ export default function App() {
                                 ) : (
                                   <h4 className="text-base font-extrabold text-slate-900">{item.activity}</h4>
                                 )}
+                                <a
+                                  href={mapsUrlFor(item)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Open in Google Maps"
+                                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+                                >
+                                  <Navigation className="w-3.5 h-3.5" />
+                                </a>
                               </div>
                             </div>
 
@@ -891,6 +903,15 @@ export default function App() {
                                       )}
                                       
                                       {opt.rating && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">★ {opt.rating}</span>}
+                                      <a
+                                        href={opt.maps || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(opt.venue)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title="Open in Google Maps"
+                                        className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+                                      >
+                                        <Navigation className="w-3 h-3" />
+                                      </a>
                                       
                                       {isEditing ? (
                                         <input 
