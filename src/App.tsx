@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Compass, MapPin, Clock, Car, Utensils, CheckSquare, 
   Check, Plus, Trash2, Calendar,
-  Edit3, Save, X, Image as ImageIcon, MessageCircle, Send, Loader2
+  Edit3, Save, X, Image as ImageIcon
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -235,8 +235,17 @@ const sanitizeDay = (day) => {
   if (safe.timeline !== undefined) safe.timeline = Array.isArray(safe.timeline) ? safe.timeline : [];
   if (safe.car1Timeline !== undefined) safe.car1Timeline = Array.isArray(safe.car1Timeline) ? safe.car1Timeline : [];
   if (safe.car2Timeline !== undefined) safe.car2Timeline = Array.isArray(safe.car2Timeline) ? safe.car2Timeline : [];
+  if (typeof safe.title !== 'string') safe.title = `Day ${safe.day ?? ''}`.trim();
   return safe;
 };
+
+// Validates a whole itinerary payload before it's ever trusted (guards against a bad edit,
+// whether from manual editing or elsewhere, corrupting saved data and blanking the page).
+const isValidItinerary = (data) =>
+  Array.isArray(data) && data.length > 0 && data.every(d => d && typeof d === 'object' && typeof d.day === 'number');
+
+const isValidTasks = (data) =>
+  Array.isArray(data) && data.every(t => t && typeof t === 'object' && 'id' in t && typeof t.text === 'string');
 
 const NEW_STOP_TEMPLATE = { time: '12:00', activity: 'New stop', type: 'landmark', notes: '' };
 
@@ -245,7 +254,8 @@ export default function App() {
   const [itineraryData, setItineraryData] = useState(() => {
     try {
       const saved = window.localStorage.getItem('gnt_itinerary_2026');
-      return saved ? JSON.parse(saved) : INITIAL_ITINERARY;
+      const parsed = saved ? JSON.parse(saved) : null;
+      return isValidItinerary(parsed) ? parsed : INITIAL_ITINERARY;
     } catch (e) {
       return INITIAL_ITINERARY;
     }
@@ -266,7 +276,8 @@ export default function App() {
   const [tasks, setTasks] = useState(() => {
     try {
       const saved = window.localStorage.getItem('gnt_tasks_2026');
-      return saved ? JSON.parse(saved) : INITIAL_TASKS;
+      const parsed = saved ? JSON.parse(saved) : null;
+      return isValidTasks(parsed) && parsed.length > 0 ? parsed : INITIAL_TASKS;
     } catch (e) {
       return INITIAL_TASKS; // Fallback for shared iframes
     }
@@ -274,13 +285,6 @@ export default function App() {
 
   const [newTaskText, setNewTaskText] = useState('');
   const dayRefs = useRef({});
-
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', text: "Hi! Tell me what to change \u2014 e.g. \"move the Pennan stop to Day 5\" or \"add a coffee stop in York at 9am\"." }
-  ]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
 
   // Safely guarantee itinerary data is a well-formed array, then sanitize every day's
   // timeline fields so corrupted/outdated cloud data can never crash the render.
@@ -326,14 +330,17 @@ export default function App() {
     
     const unsubscribe = onSnapshot(docRef, 
       (docSnap) => {
-        if (docSnap.exists() && Array.isArray(docSnap.data().days) && docSnap.data().days.length > 0) {
-          setItineraryData(docSnap.data().days);
-        } else {
+        const days = docSnap.exists() ? docSnap.data().days : null;
+        if (isValidItinerary(days)) {
+          setItineraryData(days);
+        } else if (!docSnap.exists()) {
           // First run: promote whatever is already local (not a hardcoded constant) so prior
           // edits made before Firebase was configured aren't wiped out.
           setDoc(docRef, { days: itineraryData }, { merge: true })
             .catch(e => console.warn("Cannot initialize remote DB (read-only guest)"));
         }
+        // If cloud data exists but fails validation (e.g. a corrupted edit), ignore it and
+        // keep showing the last-known-good local state rather than crashing the page.
       },
       (error) => console.warn("Firestore sync skipped:", error)
     );
@@ -347,9 +354,10 @@ export default function App() {
 
     const unsubscribe = onSnapshot(tasksRef,
       (docSnap) => {
-        if (docSnap.exists() && Array.isArray(docSnap.data().tasks)) {
-          setTasks(docSnap.data().tasks);
-        } else {
+        const remoteTasks = docSnap.exists() ? docSnap.data().tasks : null;
+        if (isValidTasks(remoteTasks)) {
+          setTasks(remoteTasks);
+        } else if (!docSnap.exists()) {
           setDoc(tasksRef, { tasks: tasks }, { merge: true })
             .catch(e => console.warn("Cannot initialize remote tasks DB (read-only guest)"));
         }
@@ -509,34 +517,6 @@ export default function App() {
     if (el) {
       const top = el.getBoundingClientRect().top + window.pageYOffset - 96;
       window.scrollTo({ top, behavior: 'smooth' });
-    }
-  };
-
-  const handleSendChat = async (e) => {
-    e.preventDefault();
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    setChatMessages(m => [...m, { role: 'user', text }]);
-    setChatInput('');
-    setChatLoading(true);
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: text, itineraryData: safeItineraryData, tasks }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setChatMessages(m => [...m, { role: 'assistant', text: `Sorry, something went wrong: ${data.error}` }]);
-      } else {
-        if (Array.isArray(data.itineraryData)) saveToCloud(data.itineraryData);
-        if (Array.isArray(data.tasks)) saveTasksToCloud(data.tasks);
-        setChatMessages(m => [...m, { role: 'assistant', text: data.reply || 'Done.' }]);
-      }
-    } catch (err) {
-      setChatMessages(m => [...m, { role: 'assistant', text: 'Sorry, I could not reach the assistant.' }]);
-    } finally {
-      setChatLoading(false);
     }
   };
 
@@ -978,51 +958,6 @@ export default function App() {
         </div>
 
       </main>
-
-      {/* AI Chat Assistant */}
-      <button
-        onClick={() => setChatOpen(o => !o)}
-        className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white p-4 rounded-full shadow-lg hover:bg-slate-800 transition-all"
-        title="Ask the trip assistant"
-      >
-        {chatOpen ? <X className="w-5 h-5" /> : <MessageCircle className="w-5 h-5" />}
-      </button>
-
-      {chatOpen && (
-        <div className="fixed bottom-24 right-6 z-50 w-[92vw] sm:w-96 h-[28rem] bg-white rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
-          <div className="px-4 py-3 bg-slate-900 text-white text-sm font-bold flex items-center gap-2">
-            <MessageCircle className="w-4 h-4" /> Trip Assistant
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {chatMessages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] text-xs font-semibold rounded-2xl px-3 py-2 leading-relaxed ${m.role === 'user' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-700'}`}>
-                  {m.text}
-                </div>
-              </div>
-            ))}
-            {chatLoading && (
-              <div className="flex justify-start">
-                <div className="bg-slate-100 text-slate-500 rounded-2xl px-3 py-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                </div>
-              </div>
-            )}
-          </div>
-          <form onSubmit={handleSendChat} className="p-3 border-t border-slate-100 flex gap-2">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder="e.g. move Pennan to Day 5"
-              className="w-full text-xs px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500 font-semibold"
-            />
-            <button type="submit" disabled={chatLoading} className="bg-slate-900 disabled:opacity-40 text-white rounded-xl px-4 text-xs font-bold flex items-center shadow-sm">
-              <Send className="w-4 h-4" />
-            </button>
-          </form>
-        </div>
-      )}
 
     </div>
   );
