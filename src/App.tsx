@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Compass, MapPin, Clock, Car, Utensils, CheckSquare, 
   Check, Plus, Trash2, Calendar,
-  Edit3, Save, X, Image as ImageIcon
+  Edit3, Save, X, Image as ImageIcon, MessageCircle, Send, Loader2
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -275,6 +275,13 @@ export default function App() {
   const [newTaskText, setNewTaskText] = useState('');
   const dayRefs = useRef({});
 
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([
+    { role: 'assistant', text: "Hi! Tell me what to change \u2014 e.g. \"move the Pennan stop to Day 5\" or \"add a coffee stop in York at 9am\"." }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+
   // Safely guarantee itinerary data is a well-formed array, then sanitize every day's
   // timeline fields so corrupted/outdated cloud data can never crash the render.
   const rawItineraryData = Array.isArray(itineraryData) && itineraryData.length > 0 ? itineraryData : INITIAL_ITINERARY;
@@ -405,6 +412,31 @@ export default function App() {
     saveToCloud(newData);
   };
 
+  const handleMoveStop = (dayIndex, timelineIndex, splitTimelineKey, direction) => {
+    const newData = JSON.parse(JSON.stringify(safeItineraryData));
+    const key = splitTimelineKey || 'timeline';
+    const list = newData[dayIndex][key];
+    if (!Array.isArray(list)) return;
+    const target = timelineIndex + direction;
+    if (target < 0 || target >= list.length) return;
+    [list[timelineIndex], list[target]] = [list[target], list[timelineIndex]];
+    saveToCloud(newData);
+  };
+
+  const handleMoveStopToDay = (dayIndex, timelineIndex, splitTimelineKey, targetDayIndex) => {
+    if (targetDayIndex === dayIndex) return;
+    const newData = JSON.parse(JSON.stringify(safeItineraryData));
+    const key = splitTimelineKey || 'timeline';
+    const sourceList = newData[dayIndex][key];
+    if (!Array.isArray(sourceList) || !sourceList[timelineIndex]) return;
+    const [stop] = sourceList.splice(timelineIndex, 1);
+    // Target day may itself be a split day; land the stop on its currently-active timeline key.
+    const targetKey = newData[targetDayIndex].isSplit ? (splitTimelineKey || 'timeline') : 'timeline';
+    if (!Array.isArray(newData[targetDayIndex][targetKey])) newData[targetDayIndex][targetKey] = [];
+    newData[targetDayIndex][targetKey].push(stop);
+    saveToCloud(newData);
+  };
+
   const handleAddRestaurantOption = (dayIndex, timelineIndex, splitTimelineKey) => {
     const newData = JSON.parse(JSON.stringify(safeItineraryData));
     const targetTimeline = splitTimelineKey ? newData[dayIndex][splitTimelineKey] : newData[dayIndex].timeline;
@@ -477,6 +509,34 @@ export default function App() {
     if (el) {
       const top = el.getBoundingClientRect().top + window.pageYOffset - 96;
       window.scrollTo({ top, behavior: 'smooth' });
+    }
+  };
+
+  const handleSendChat = async (e) => {
+    e.preventDefault();
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+    setChatMessages(m => [...m, { role: 'user', text }]);
+    setChatInput('');
+    setChatLoading(true);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: text, itineraryData: safeItineraryData, tasks }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setChatMessages(m => [...m, { role: 'assistant', text: `Sorry, something went wrong: ${data.error}` }]);
+      } else {
+        if (Array.isArray(data.itineraryData)) saveToCloud(data.itineraryData);
+        if (Array.isArray(data.tasks)) saveTasksToCloud(data.tasks);
+        setChatMessages(m => [...m, { role: 'assistant', text: data.reply || 'Done.' }]);
+      }
+    } catch (err) {
+      setChatMessages(m => [...m, { role: 'assistant', text: 'Sorry, I could not reach the assistant.' }]);
+    } finally {
+      setChatLoading(false);
     }
   };
 
@@ -729,13 +789,42 @@ export default function App() {
                           <div className="flex-1 ml-14 bg-white border border-slate-200 rounded-[1.5rem] p-5 sm:p-6 shadow-sm relative group/stop">
 
                             {isEditing && (
-                              <button
-                                onClick={() => handleDeleteStop(dayIndex, timelineIndex, splitTimelineKey)}
-                                className="absolute -top-2 -right-2 bg-rose-500 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover/stop:opacity-100 transition-opacity z-10"
-                                title="Remove this stop"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              <div className="absolute -top-2 -right-2 flex gap-1 z-10">
+                                <button
+                                  onClick={() => handleMoveStop(dayIndex, timelineIndex, splitTimelineKey, -1)}
+                                  disabled={timelineIndex === 0}
+                                  className="bg-slate-700 disabled:opacity-30 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover/stop:opacity-100 transition-opacity"
+                                  title="Move earlier"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  onClick={() => handleMoveStop(dayIndex, timelineIndex, splitTimelineKey, 1)}
+                                  disabled={timelineIndex === activeTimeline.length - 1}
+                                  className="bg-slate-700 disabled:opacity-30 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover/stop:opacity-100 transition-opacity"
+                                  title="Move later"
+                                >
+                                  ↓
+                                </button>
+                                <select
+                                  value=""
+                                  onChange={(e) => { if (e.target.value !== '') handleMoveStopToDay(dayIndex, timelineIndex, splitTimelineKey, Number(e.target.value)); }}
+                                  className="text-[10px] font-bold bg-white border border-slate-300 rounded-full px-1.5 opacity-0 group-hover/stop:opacity-100 transition-opacity"
+                                  title="Move to day..."
+                                >
+                                  <option value="">Move to day…</option>
+                                  {safeItineraryData.map((d, idx) => idx !== dayIndex && (
+                                    <option key={d.day} value={idx}>Day {d.day}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  onClick={() => handleDeleteStop(dayIndex, timelineIndex, splitTimelineKey)}
+                                  className="bg-rose-500 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover/stop:opacity-100 transition-opacity"
+                                  title="Remove this stop"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             )}
                             
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
@@ -889,6 +978,51 @@ export default function App() {
         </div>
 
       </main>
+
+      {/* AI Chat Assistant */}
+      <button
+        onClick={() => setChatOpen(o => !o)}
+        className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white p-4 rounded-full shadow-lg hover:bg-slate-800 transition-all"
+        title="Ask the trip assistant"
+      >
+        {chatOpen ? <X className="w-5 h-5" /> : <MessageCircle className="w-5 h-5" />}
+      </button>
+
+      {chatOpen && (
+        <div className="fixed bottom-24 right-6 z-50 w-[92vw] sm:w-96 h-[28rem] bg-white rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+          <div className="px-4 py-3 bg-slate-900 text-white text-sm font-bold flex items-center gap-2">
+            <MessageCircle className="w-4 h-4" /> Trip Assistant
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] text-xs font-semibold rounded-2xl px-3 py-2 leading-relaxed ${m.role === 'user' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-100 text-slate-500 rounded-2xl px-3 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                </div>
+              </div>
+            )}
+          </div>
+          <form onSubmit={handleSendChat} className="p-3 border-t border-slate-100 flex gap-2">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="e.g. move Pennan to Day 5"
+              className="w-full text-xs px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500 font-semibold"
+            />
+            <button type="submit" disabled={chatLoading} className="bg-slate-900 disabled:opacity-40 text-white rounded-xl px-4 text-xs font-bold flex items-center shadow-sm">
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
+      )}
 
     </div>
   );
