@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Compass, MapPin, Clock, Car, Utensils, CheckSquare, 
-  ExternalLink, Check, Plus, Trash2, Calendar, Navigation,
-  Map, Info, Edit3, Save, X, Image as ImageIcon
+  Check, Plus, Trash2, Calendar,
+  Edit3, Save, X, Image as ImageIcon
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -322,12 +322,32 @@ export default function App() {
         if (docSnap.exists() && Array.isArray(docSnap.data().days) && docSnap.data().days.length > 0) {
           setItineraryData(docSnap.data().days);
         } else {
-          // Initialize DB structure if empty (gracefully catch if guest lacks write permissions)
-          setDoc(docRef, { days: INITIAL_ITINERARY }, { merge: true })
+          // First run: promote whatever is already local (not a hardcoded constant) so prior
+          // edits made before Firebase was configured aren't wiped out.
+          setDoc(docRef, { days: itineraryData }, { merge: true })
             .catch(e => console.warn("Cannot initialize remote DB (read-only guest)"));
         }
       },
       (error) => console.warn("Firestore sync skipped:", error)
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  // Sync tasks with Cloud Firestore (if active) - real-time, cross-device
+  useEffect(() => {
+    if (!user || !db) return;
+    const tasksRef = doc(db, 'artifacts', appId, 'public', 'data', 'tasksData', 'main');
+
+    const unsubscribe = onSnapshot(tasksRef,
+      (docSnap) => {
+        if (docSnap.exists() && Array.isArray(docSnap.data().tasks)) {
+          setTasks(docSnap.data().tasks);
+        } else {
+          setDoc(tasksRef, { tasks: tasks }, { merge: true })
+            .catch(e => console.warn("Cannot initialize remote tasks DB (read-only guest)"));
+        }
+      },
+      (error) => console.warn("Task sync skipped:", error)
     );
     return () => unsubscribe();
   }, [user]);
@@ -429,18 +449,35 @@ export default function App() {
     }
   };
 
-  const toggleTask = (id) => setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
-  const deleteTask = (id) => setTasks(tasks.filter(t => t.id !== id));
+  const saveTasksToCloud = async (newTasks) => {
+    setTasks(newTasks); // Immediate optimistic UI update
+    try { window.localStorage.setItem('gnt_tasks_2026', JSON.stringify(newTasks)); } catch (e) {}
+    if (user && db) {
+      try {
+        const tasksRef = doc(db, 'artifacts', appId, 'public', 'data', 'tasksData', 'main');
+        await setDoc(tasksRef, { tasks: newTasks }, { merge: true });
+      } catch (e) {
+        console.warn("Failed to push tasks to cloud, saving locally only.");
+      }
+    }
+  };
+
+  const toggleTask = (id) => saveTasksToCloud(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+  const deleteTask = (id) => saveTasksToCloud(tasks.filter(t => t.id !== id));
   const addTask = (e) => {
     e.preventDefault();
     if (!newTaskText.trim()) return;
-    setTasks([...tasks, { id: Date.now(), text: newTaskText, completed: false, category: 'General' }]);
+    saveTasksToCloud([...tasks, { id: Date.now(), text: newTaskText, completed: false, category: 'General' }]);
     setNewTaskText('');
   };
 
   const scrollToDay = (dayNum) => {
     setActiveDay(dayNum);
-    dayRefs.current[dayNum]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const el = dayRefs.current[dayNum];
+    if (el) {
+      const top = el.getBoundingClientRect().top + window.pageYOffset - 96;
+      window.scrollTo({ top, behavior: 'smooth' });
+    }
   };
 
   const completedCount = (tasks || []).filter(t => t.completed).length;
