@@ -147,7 +147,10 @@ const INITIAL_ITINERARY = [
       { time: '12:45', activity: 'Depart for Rosemarkie', type: 'travel' },
       {
         time: '~13:00 to 14:30', activity: 'Lunch, Rosemarkie', type: 'food',
-        options: [{ id: 'opt1', venue: 'Crofters Cafe', cuisine: 'Kosher-compliant local fish', rating: '4.6', suggestedOrder: 'Local white fish cooked in vegetable oil.', maps: 'https://www.google.com/maps/search/?api=1&query=Crofters+Cafe+Rosemarkie' }]
+        options: [
+          { id: 'opt1', venue: 'Crofters Cafe', cuisine: 'Kosher-compliant local fish', rating: '4.6', suggestedOrder: 'Local white fish cooked in vegetable oil.', maps: 'https://www.google.com/maps/search/?api=1&query=Crofters+Cafe+Rosemarkie' },
+          { id: 'opt2', venue: 'IV10 Cafe Bar Deli', cuisine: 'Backup option, Fortrose', suggestedOrder: 'Use if Crofters Cafe is unavailable.', maps: 'https://www.google.com/maps/search/?api=1&query=IV10+Cafe+Bar+Deli+Fortrose' }
+        ]
       },
       { time: '14:30', activity: 'Depart for Pennan', type: 'travel' },
       { time: '~15:45', activity: 'Arrive Pennan', type: 'landmark', image: 'https://commons.wikimedia.org/wiki/Special:FilePath/Pennan_-_geograph.org.uk_-_29146.jpg' },
@@ -202,6 +205,7 @@ const INITIAL_ITINERARY = [
       { time: '~15:30', activity: 'Arrive Marlow', type: 'landmark' },
       {
         time: '15:30 to 17:30', activity: 'Marlow', type: 'food',
+        notes: 'Lunch and a wander by the Thames, the suspension bridge and the weir.',
         options: [{ id: 'opt1', venue: 'Satollo', cuisine: 'Italian', rating: '4.6', suggestedOrder: 'Authentic Caprese panini and espresso.', maps: 'https://www.google.com/maps/search/?api=1&query=Satollo+Marlow' }]
       },
       { time: '17:30', activity: 'Depart for home', type: 'travel' },
@@ -216,6 +220,19 @@ const INITIAL_TASKS = [
   { id: 3, text: 'Book Newcastle West End accommodation', completed: false, category: 'Stay' },
   { id: 4, text: 'Pre-book Speyside Cooperage Tour', completed: false, category: 'Tours' }
 ];
+
+// Guarantees a day object always has array-shaped timelines, even if cloud data is corrupted or
+// on an outdated schema. Prevents .map() crashes when Firestore returns non-array values.
+const sanitizeDay = (day) => {
+  if (!day || typeof day !== 'object') return day;
+  const safe = { ...day };
+  if (safe.timeline !== undefined) safe.timeline = Array.isArray(safe.timeline) ? safe.timeline : [];
+  if (safe.car1Timeline !== undefined) safe.car1Timeline = Array.isArray(safe.car1Timeline) ? safe.car1Timeline : [];
+  if (safe.car2Timeline !== undefined) safe.car2Timeline = Array.isArray(safe.car2Timeline) ? safe.car2Timeline : [];
+  return safe;
+};
+
+const NEW_STOP_TEMPLATE = { time: '12:00', activity: 'New stop', type: 'landmark', notes: '' };
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -245,10 +262,11 @@ export default function App() {
   const [newTaskText, setNewTaskText] = useState('');
   const dayRefs = useRef({});
 
-  // Safely guarantee itinerary data is an array (protects against broken cloud data)
-  const safeItineraryData = Array.isArray(itineraryData) && itineraryData.length > 0 ? itineraryData : INITIAL_ITINERARY;
+  // Safely guarantee itinerary data is a well-formed array, then sanitize every day's
+  // timeline fields so corrupted/outdated cloud data can never crash the render.
+  const rawItineraryData = Array.isArray(itineraryData) && itineraryData.length > 0 ? itineraryData : INITIAL_ITINERARY;
+  const safeItineraryData = rawItineraryData.map(sanitizeDay);
 
-  
   // Save preferences securely to local storage
   useEffect(() => {
     try { window.localStorage.setItem('gnt_car_selection', selectedCar); } catch (e) {}
@@ -288,7 +306,7 @@ export default function App() {
     
     const unsubscribe = onSnapshot(docRef, 
       (docSnap) => {
-        if (docSnap.exists() && docSnap.data().days) {
+        if (docSnap.exists() && Array.isArray(docSnap.data().days) && docSnap.data().days.length > 0) {
           setItineraryData(docSnap.data().days);
         } else {
           // Initialize DB structure if empty (gracefully catch if guest lacks write permissions)
@@ -323,6 +341,32 @@ export default function App() {
       if (targetTimeline && targetTimeline[timelineIndex]) {
         targetTimeline[timelineIndex].image = newUrl;
       }
+    }
+    saveToCloud(newData);
+  };
+
+  const handleUpdateStopField = (dayIndex, timelineIndex, splitTimelineKey, field, value) => {
+    const newData = JSON.parse(JSON.stringify(safeItineraryData));
+    const targetTimeline = splitTimelineKey ? newData[dayIndex][splitTimelineKey] : newData[dayIndex].timeline;
+    if (Array.isArray(targetTimeline) && targetTimeline[timelineIndex]) {
+      targetTimeline[timelineIndex][field] = value;
+      saveToCloud(newData);
+    }
+  };
+
+  const handleAddStop = (dayIndex, splitTimelineKey) => {
+    const newData = JSON.parse(JSON.stringify(safeItineraryData));
+    const key = splitTimelineKey || 'timeline';
+    if (!Array.isArray(newData[dayIndex][key])) newData[dayIndex][key] = [];
+    newData[dayIndex][key].push({ ...NEW_STOP_TEMPLATE });
+    saveToCloud(newData);
+  };
+
+  const handleDeleteStop = (dayIndex, timelineIndex, splitTimelineKey) => {
+    const newData = JSON.parse(JSON.stringify(safeItineraryData));
+    const key = splitTimelineKey || 'timeline';
+    if (Array.isArray(newData[dayIndex][key])) {
+      newData[dayIndex][key] = newData[dayIndex][key].filter((_, i) => i !== timelineIndex);
     }
     saveToCloud(newData);
   };
@@ -456,7 +500,7 @@ export default function App() {
         {isEditing && (
           <div className="mb-6 bg-emerald-500 text-white px-4 py-3 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm animate-pulse">
             <Edit3 className="w-5 h-5" />
-            Edit Mode is Active. You can now change photos, add multi-option restaurants, and plan your orders. Changes automatically sync via the cloud.
+            Edit Mode is Active. You can now change photos, add or remove stops, add multi-option restaurants, and plan your orders. Changes automatically sync via the cloud.
           </div>
         )}
 
@@ -552,17 +596,17 @@ export default function App() {
               if (selectedCar === 'Car 2' && dayObj.day > 3) return null;
 
               const isSplitDay = dayObj.isSplit;
-              let activeTimeline = dayObj.timeline || [];
+              let activeTimeline = Array.isArray(dayObj.timeline) ? dayObj.timeline : [];
               let splitTimelineKey = null;
               let dayTitle = dayObj.title || `Day ${dayObj.day}`;
               
               if (isSplitDay) {
                 if (selectedCar === 'Car 1') {
-                  activeTimeline = dayObj.car1Timeline || dayObj.timeline || [];
+                  activeTimeline = Array.isArray(dayObj.car1Timeline) ? dayObj.car1Timeline : (Array.isArray(dayObj.timeline) ? dayObj.timeline : []);
                   splitTimelineKey = 'car1Timeline';
                   dayTitle = "Stokesley to Banff";
                 } else {
-                  activeTimeline = dayObj.car2Timeline || dayObj.timeline || [];
+                  activeTimeline = Array.isArray(dayObj.car2Timeline) ? dayObj.car2Timeline : (Array.isArray(dayObj.timeline) ? dayObj.timeline : []);
                   splitTimelineKey = 'car2Timeline';
                   dayTitle = "Stokesley to London";
                 }
@@ -614,7 +658,7 @@ export default function App() {
 
                   {/* Feed Elements */}
                   <div className="p-8 space-y-8 bg-slate-50/30">
-                    {(activeTimeline || []).map((item, timelineIndex) => {
+                    {activeTimeline.map((item, timelineIndex) => {
                       const isFood = item.type === 'food';
                       const isTravel = item.type === 'travel';
 
@@ -631,15 +675,41 @@ export default function App() {
                             {timelineIndex !== activeTimeline.length - 1 && <div className="w-0.5 flex-1 bg-slate-200 mt-2"></div>}
                           </div>
 
-                          <div className="flex-1 ml-14 bg-white border border-slate-200 rounded-[1.5rem] p-5 sm:p-6 shadow-sm">
+                          <div className="flex-1 ml-14 bg-white border border-slate-200 rounded-[1.5rem] p-5 sm:p-6 shadow-sm relative group/stop">
+
+                            {isEditing && (
+                              <button
+                                onClick={() => handleDeleteStop(dayIndex, timelineIndex, splitTimelineKey)}
+                                className="absolute -top-2 -right-2 bg-rose-500 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover/stop:opacity-100 transition-opacity z-10"
+                                title="Remove this stop"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                              <div className="flex items-center gap-3">
-                                <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-800 text-xs px-3 py-1.5 rounded-xl font-bold">
-                                  <Clock className="w-3.5 h-3.5 text-slate-500" />
-                                  {item.time}
-                                </span>
-                                <h4 className="text-base font-extrabold text-slate-900">{item.activity}</h4>
+                              <div className="flex items-center gap-3 flex-wrap">
+                                {isEditing ? (
+                                  <input
+                                    type="text" value={item.time}
+                                    onChange={(e) => handleUpdateStopField(dayIndex, timelineIndex, splitTimelineKey, 'time', e.target.value)}
+                                    className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-800 text-xs px-3 py-1.5 rounded-xl font-bold border border-slate-300 w-24"
+                                  />
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-800 text-xs px-3 py-1.5 rounded-xl font-bold">
+                                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                                    {item.time}
+                                  </span>
+                                )}
+                                {isEditing ? (
+                                  <input
+                                    type="text" value={item.activity}
+                                    onChange={(e) => handleUpdateStopField(dayIndex, timelineIndex, splitTimelineKey, 'activity', e.target.value)}
+                                    className="text-base font-extrabold text-slate-900 border border-slate-300 rounded px-2 py-1"
+                                  />
+                                ) : (
+                                  <h4 className="text-base font-extrabold text-slate-900">{item.activity}</h4>
+                                )}
                               </div>
                             </div>
 
@@ -662,7 +732,17 @@ export default function App() {
                               </div>
                             )}
 
-                            {item.notes && <p className="text-sm text-slate-600 leading-relaxed font-medium">{item.notes}</p>}
+                            {isEditing ? (
+                              <textarea
+                                value={item.notes || ''}
+                                placeholder="Notes..."
+                                onChange={(e) => handleUpdateStopField(dayIndex, timelineIndex, splitTimelineKey, 'notes', e.target.value)}
+                                className="w-full text-sm text-slate-600 leading-relaxed font-medium bg-slate-50 border border-slate-200 rounded p-2"
+                                rows={2}
+                              />
+                            ) : (
+                              item.notes && <p className="text-sm text-slate-600 leading-relaxed font-medium">{item.notes}</p>
+                            )}
 
                             {/* Multi-Option Dynamic Restaurants Block */}
                             {isFood && Array.isArray(item.options) && (
@@ -690,7 +770,7 @@ export default function App() {
                                         <h5 className="text-sm font-extrabold text-slate-900">{opt.venue}</h5>
                                       )}
                                       
-                                      <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">★ {opt.rating}</span>
+                                      {opt.rating && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">★ {opt.rating}</span>}
                                       
                                       {isEditing ? (
                                         <input 
@@ -737,6 +817,16 @@ export default function App() {
                         </div>
                       );
                     })}
+
+                    {isEditing && (
+                      <button
+                        onClick={() => handleAddStop(dayIndex, splitTimelineKey)}
+                        className="w-full ml-14 py-3 border-2 border-dashed border-slate-300 text-slate-500 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-slate-50 hover:border-slate-400"
+                        style={{ width: 'calc(100% - 3.5rem)' }}
+                      >
+                        <Plus className="w-4 h-4" /> Add Stop
+                      </button>
+                    )}
                   </div>
 
                 </div>
