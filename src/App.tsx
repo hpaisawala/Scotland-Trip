@@ -859,7 +859,7 @@ export default function App() {
                             </div>
 
                             {/* Standard Image with Hover Edit Overlay */}
-                            {item.image && (
+                            {item.image ? (
                               <div className="my-4 rounded-2xl overflow-hidden h-48 sm:h-64 w-full relative group/img">
                                 <SafeImage src={item.image} alt={item.activity} className="w-full h-full object-cover" />
                                 {isEditing && (
@@ -874,6 +874,16 @@ export default function App() {
                                      </div>
                                   </div>
                                 )}
+                              </div>
+                            ) : isEditing && (
+                              <div className="my-4 rounded-2xl border-2 border-dashed border-slate-300 h-24 w-full flex items-center justify-center gap-2 bg-slate-50">
+                                <ImageIcon className="w-4 h-4 text-slate-400" />
+                                <input
+                                  type="text" placeholder="Paste image URL to add a photo..."
+                                  className="text-xs px-2 py-1 border rounded w-56 bg-white"
+                                  onBlur={(e) => handleUpdateImage(dayIndex, timelineIndex, splitTimelineKey, e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Enter' && handleUpdateImage(dayIndex, timelineIndex, splitTimelineKey, e.target.value)}
+                                />
                               </div>
                             )}
 
