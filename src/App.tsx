@@ -41,7 +41,9 @@ const SafeImage = ({ src, alt, className }) => {
       src={src || fallbackSrc}
       alt={alt}
       className={className}
+      referrerPolicy="no-referrer"
       onError={(e) => {
+        console.warn('Image failed to load:', e.target.src);
         if (e.target.src !== fallbackSrc) e.target.src = fallbackSrc;
       }}
     />
