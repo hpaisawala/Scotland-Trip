@@ -254,6 +254,7 @@ const mapsUrlFor = (item) => item.maps || `https://www.google.com/maps/search/?a
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [dbSynced, setDbSynced] = useState(false);
   const [itineraryData, setItineraryData] = useState(() => {
     try {
       const saved = window.localStorage.getItem('gnt_itinerary_2026');
@@ -328,7 +329,7 @@ export default function App() {
 
   // Sync data with Cloud Firestore (if active)
   useEffect(() => {
-    if (!user || !db) return; // Safely skip if not authenticated or no DB
+    if (!user || !db) { setDbSynced(true); return; } // Safely skip if not authenticated or no DB
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'itineraryData', 'main');
     
     const unsubscribe = onSnapshot(docRef, 
@@ -344,8 +345,9 @@ export default function App() {
         }
         // If cloud data exists but fails validation (e.g. a corrupted edit), ignore it and
         // keep showing the last-known-good local state rather than crashing the page.
+        setDbSynced(true);
       },
-      (error) => console.warn("Firestore sync skipped:", error)
+      (error) => { console.warn("Firestore sync skipped:", error); setDbSynced(true); }
     );
     return () => unsubscribe();
   }, [user]);
@@ -525,6 +527,17 @@ export default function App() {
 
   const completedCount = (tasks || []).filter(t => t.completed).length;
   const progressPercent = tasks && tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+
+  if (!dbSynced) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-slate-500">
+          <div className="w-8 h-8 border-3 border-slate-300 border-t-emerald-500 rounded-full animate-spin"></div>
+          <p className="text-sm font-semibold">Loading itinerary...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
@@ -902,7 +915,19 @@ export default function App() {
                                         <h5 className="text-sm font-extrabold text-slate-900">{opt.venue}</h5>
                                       )}
                                       
-                                      {opt.rating && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">★ {opt.rating}</span>}
+                                      {isEditing ? (
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">
+                                          ★
+                                          <input
+                                            type="text" value={opt.rating || ''}
+                                            onChange={(e) => handleUpdateRestaurantOption(dayIndex, timelineIndex, splitTimelineKey, opt.id, 'rating', e.target.value)}
+                                            placeholder="4.5"
+                                            className="w-10 bg-white border border-amber-300 rounded px-1 text-slate-900 text-[10px] font-bold"
+                                          />
+                                        </span>
+                                      ) : (
+                                        opt.rating && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-lg">★ {opt.rating}</span>
+                                      )}
                                       <a
                                         href={opt.maps || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(opt.venue)}`}
                                         target="_blank"
